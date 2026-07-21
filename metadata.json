@@ -1,0 +1,6 @@
+{
+  "name": "Smart Reading Lamp",
+  "description": "A premium smart pendant lamp control app with real-time physics, interactive gestures, and ambient soundscapes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
