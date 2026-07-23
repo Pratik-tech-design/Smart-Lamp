@@ -1037,7 +1037,7 @@ fun SmartLampHeader(
             modifier = Modifier.weight(1f)
         ) {
             Text(
-                text = "Hanging Lamp",
+                text = "AfterDark",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = textColor,

@@ -453,7 +453,7 @@ fun PowerAndBrightnessSection(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "Smart Lamp",
+                            text = "AfterDark",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color = theme.textPrimary

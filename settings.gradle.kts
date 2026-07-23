@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Smart Reading Lamp"
+rootProject.name = "AfterDark"
 
 include(":app")
