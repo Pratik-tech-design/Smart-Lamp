@@ -74,13 +74,8 @@ class LampViewModel : ViewModel() {
     val showPermissionDialog: StateFlow<Boolean> = _showPermissionDialog.asStateFlow()
 
     fun checkWriteSettingsPermission(context: android.content.Context) {
-        val checkContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            context.createAttributionContext("default")
-        } else {
-            context
-        }
         _hasWriteSettingsPermission.value = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            android.provider.Settings.System.canWrite(checkContext)
+            android.provider.Settings.System.canWrite(context)
         } else {
             true
         }
@@ -361,16 +356,42 @@ class LampViewModel : ViewModel() {
         }
     }
 
+    private var ambientFadeJob: Job? = null
+
     // 7. Ambient Audio Actions
     fun selectAmbientSound(soundType: AmbientSoundType) {
-        _ambientSound.value = soundType
-        if (soundType == AmbientSoundType.NONE) {
-            _isPlayingSound.value = false
-            soundSynthesizer.stop()
-        } else {
-            _isPlayingSound.value = true
-            if (_isOn.value) {
-                soundSynthesizer.start(soundType, _ambientVolume.value)
+        if (_ambientSound.value == soundType && _isPlayingSound.value) {
+            togglePlaySound()
+            return
+        }
+
+        ambientFadeJob?.cancel()
+        ambientFadeJob = viewModelScope.launch {
+            val targetVol = _ambientVolume.value
+            if (_isPlayingSound.value && _ambientSound.value != AmbientSoundType.NONE) {
+                // Fade out previous sound over ~500ms
+                val steps = 10
+                for (i in 1..steps) {
+                    val tempVol = targetVol * (steps - i) / steps.toFloat()
+                    soundSynthesizer.setVolume(tempVol)
+                    delay(50)
+                }
+            }
+
+            _ambientSound.value = soundType
+            if (soundType == AmbientSoundType.NONE) {
+                _isPlayingSound.value = false
+                soundSynthesizer.stop()
+            } else {
+                _isPlayingSound.value = true
+                soundSynthesizer.start(soundType, 0f)
+                // Fade in new sound over ~500ms
+                val steps = 10
+                for (i in 1..steps) {
+                    val tempVol = targetVol * i / steps.toFloat()
+                    soundSynthesizer.setVolume(tempVol)
+                    delay(50)
+                }
             }
         }
     }
@@ -378,20 +399,36 @@ class LampViewModel : ViewModel() {
     fun togglePlaySound() {
         if (_ambientSound.value == AmbientSoundType.NONE) return
         
-        if (_isPlayingSound.value) {
-            soundSynthesizer.stop()
-            _isPlayingSound.value = false
-        } else {
-            _isPlayingSound.value = true
-            if (_isOn.value) {
-                soundSynthesizer.start(_ambientSound.value, _ambientVolume.value)
+        ambientFadeJob?.cancel()
+        ambientFadeJob = viewModelScope.launch {
+            val targetVol = _ambientVolume.value
+            if (_isPlayingSound.value) {
+                // Fade out over ~500ms
+                val steps = 10
+                for (i in 1..steps) {
+                    val tempVol = targetVol * (steps - i) / steps.toFloat()
+                    soundSynthesizer.setVolume(tempVol)
+                    delay(50)
+                }
+                soundSynthesizer.stop()
+                _isPlayingSound.value = false
+            } else {
+                _isPlayingSound.value = true
+                soundSynthesizer.start(_ambientSound.value, 0f)
+                // Fade in over ~500ms
+                val steps = 10
+                for (i in 1..steps) {
+                    val tempVol = targetVol * i / steps.toFloat()
+                    soundSynthesizer.setVolume(tempVol)
+                    delay(50)
+                }
             }
         }
     }
 
     fun setAmbientVolume(volume: Float) {
         _ambientVolume.value = volume
-        if (_isPlayingSound.value && _isOn.value) {
+        if (_isPlayingSound.value) {
             soundSynthesizer.setVolume(volume)
         }
     }

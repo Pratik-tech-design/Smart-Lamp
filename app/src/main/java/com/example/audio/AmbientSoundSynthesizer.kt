@@ -12,15 +12,12 @@ import kotlin.math.sin
 
 enum class AmbientSoundType(val displayName: String) {
     NONE("None"),
-    RAIN("Rain"),
-    OCEAN("Ocean"),
-    FIREPLACE("Fireplace"),
-    FOREST("Forest"),
-    CAFE("Cafe"),
-    BROWN_NOISE("Brown Noise"),
-    WHITE_NOISE("White Noise"),
-    SOFT_PIANO("Soft Piano"),
-    LO_FI("Lo-fi")
+    RAIN("🌧 Rain"),
+    OCEAN("🌊 Ocean"),
+    NATURAL("🌿 Natural"),
+    MEDITATION("🧘 Meditation"),
+    DEEP_SOUND("🌌 Deep Sound"),
+    BELL("🔔 Bell")
 }
 
 class AmbientSoundSynthesizer {
@@ -136,21 +133,24 @@ class AmbientSoundSynthesizer {
         var crackleAmplitude = 0f
         var crackleDecay = 0.95f
 
-        // Variables for Soft Piano / Lo-Fi Generative chords
-        val scaleFrequencies = floatArrayOf(
-            130.81f, // C3
-            146.83f, // D3
-            164.81f, // E3
-            196.00f, // G3
+        // Frequencies for Meditation (Pentatonic scales) & Bell (Overtones)
+        val medFrequencies = floatArrayOf(
+            174.61f, // F3
             220.00f, // A3
             261.63f, // C4
             293.66f, // D4
             329.63f, // E4
+            349.23f, // F4
+            440.00f  // A4
+        )
+        val bellFrequencies = floatArrayOf(
+            261.63f, // C4
+            329.63f, // E4
             392.00f, // G4
-            440.00f, // A4
+            432.00f, // A4 (432Hz tuning)
             523.25f  // C5
         )
-        
+
         class ActiveNote(val freq: Float, var time: Double, val maxVolume: Float, val decay: Float)
         val activeNotes = mutableListOf<ActiveNote>()
         var pianoTick = 0
@@ -166,30 +166,6 @@ class AmbientSoundSynthesizer {
                 val t = phase / sampleRate
 
                 when (type) {
-                    AmbientSoundType.WHITE_NOISE -> {
-                        sample = random.nextFloat() * 2f - 1f
-                    }
-
-                    AmbientSoundType.BROWN_NOISE -> {
-                        // Mathematically integrated random walk (Brownian motion)
-                        val white = random.nextFloat() * 2f - 1f
-                        lastOutputValue = (lastOutputValue * 0.98f) + white * 0.06f
-                        sample = lastOutputValue * 3.5f // scale to standard amplitude
-                    }
-
-                    AmbientSoundType.OCEAN -> {
-                        // Periodic swell using slow LFO sin wave (period approx 7s)
-                        val swell = (sin(2.0 * PI * t / 7.0) + 1.0) / 2.0
-                        // Add slightly higher frequency breathing component (period approx 3s)
-                        val secondarySwell = (sin(2.0 * PI * t / 3.2) + 1.0) / 2.0 * 0.2
-                        val totalSwell = (swell * 0.8 + secondarySwell * 0.2).coerceIn(0.0, 1.0)
-
-                        // Smooth brown/pink-ish noise
-                        val white = random.nextFloat() * 2f - 1f
-                        lastOutputValue = (lastOutputValue * 0.95f) + white * 0.08f
-                        sample = lastOutputValue * 2.5f * totalSwell.toFloat()
-                    }
-
                     AmbientSoundType.RAIN -> {
                         // Base constant soft noise (rumble of falling rain)
                         val white = random.nextFloat() * 2f - 1f
@@ -211,165 +187,139 @@ class AmbientSoundSynthesizer {
                         sample = rainBase
                     }
 
-                    AmbientSoundType.FIREPLACE -> {
-                        // Background low flame rumble (Brown Noise-like)
-                        val white = random.nextFloat() * 2f - 1f
-                        lastOutputValue = (lastOutputValue * 0.97f) + white * 0.06f
-                        var fireBase = lastOutputValue * 1.5f
+                    AmbientSoundType.OCEAN -> {
+                        // Periodic swell using slow LFO sin wave (period approx 7s)
+                        val swell = (sin(2.0 * PI * t / 7.0) + 1.0) / 2.0
+                        val secondarySwell = (sin(2.0 * PI * t / 3.2) + 1.0) / 2.0 * 0.2
+                        val totalSwell = (swell * 0.8 + secondarySwell * 0.2).coerceIn(0.0, 1.0)
 
-                        // Fire crackle impulses
-                        if (crackleCountdown <= 0) {
-                            if (random.nextFloat() < 0.003f) { // low chance, sudden crack
-                                crackleCountdown = random.nextInt(200) + 50
-                                crackleAmplitude = (random.nextFloat() * 0.8f + 0.2f)
-                                crackleDecay = 0.92f
-                            }
-                        } else {
-                            crackleCountdown--
-                            crackleAmplitude *= crackleDecay
-                            // Add crackling high-frequency pops
-                            if (random.nextFloat() < 0.15f) {
-                                fireBase += (if (random.nextBoolean()) 1f else -1f) * crackleAmplitude * 1.8f
-                            }
-                        }
-                        sample = fireBase
+                        // Smooth brown/pink-ish noise
+                        val white = random.nextFloat() * 2f - 1f
+                        lastOutputValue = (lastOutputValue * 0.95f) + white * 0.08f
+                        sample = lastOutputValue * 2.5f * totalSwell.toFloat()
                     }
 
-                    AmbientSoundType.FOREST -> {
+                    AmbientSoundType.NATURAL -> {
                         // Soft wind/rustle background
                         val white = random.nextFloat() * 2f - 1f
                         lastOutputValue = (lastOutputValue * 0.94f) + white * 0.08f
-                        var forestBase = lastOutputValue * 0.6f
+                        var naturalBase = lastOutputValue * 0.6f
 
-                        // Generative birds chirping (FM sweeps)
-                        // Trigger a chirp sequence
+                        // Birds chirping / breeze FM sweeps
                         if (secondPhase <= 0.0) {
-                            if (random.nextFloat() < 0.0008f) { // rare bird calls
-                                secondPhase = sampleRate * 0.35 // 350ms duration chirp
+                            if (random.nextFloat() < 0.0008f) { // bird call
+                                secondPhase = sampleRate * 0.35 // 350ms duration
                             }
                         } else {
                             secondPhase--
                             val progress = 1.0 - (secondPhase / (sampleRate * 0.35))
-                            // Bird frequency sweep (1500Hz upwards to 2100Hz with vibrato)
                             val chirpFreq = 1600.0 + 500.0 * progress + sin(2 * PI * progress * 15.0) * 100.0
-                            val chirpEnvelope = sin(progress * PI).toFloat() // fade in/out
-                            forestBase += (sin(2.0 * PI * chirpFreq * (progress * 0.35)) * 0.25 * chirpEnvelope).toFloat()
+                            val chirpEnvelope = sin(progress * PI).toFloat()
+                            naturalBase += (sin(2.0 * PI * chirpFreq * (progress * 0.35)) * 0.25 * chirpEnvelope).toFloat()
                         }
-                        sample = forestBase
+                        sample = naturalBase
                     }
 
-                    AmbientSoundType.CAFE -> {
-                        // Low chatter murmur (combined slow frequency shifts)
-                        val white = random.nextFloat() * 2f - 1f
-                        lastOutputValue = (lastOutputValue * 0.92f) + white * 0.1f
-                        var cafeBase = lastOutputValue * 0.8f
-
-                        // Random clinks of porcelain/cups (high frequency resonators)
-                        if (secondPhase <= 0.0) {
-                            if (random.nextFloat() < 0.001f) { // cup clink
-                                secondPhase = sampleRate * 0.15 // 150ms
-                            }
-                        } else {
-                            secondPhase--
-                            val progress = 1.0 - (secondPhase / (sampleRate * 0.15))
-                            val clinkFreq = 2500.0 + 200.0 * sin(progress * 5.0)
-                            val clinkDecay = exp(-progress * 8.0).toFloat()
-                            cafeBase += (sin(2.0 * PI * clinkFreq * (progress * 0.15)) * 0.12 * clinkDecay).toFloat()
-                        }
-                        sample = cafeBase
-                    }
-
-                    AmbientSoundType.SOFT_PIANO -> {
-                        // Ambient hum background
+                    AmbientSoundType.MEDITATION -> {
+                        // Soft warm pad background
                         val white = random.nextFloat() * 2f - 1f
                         lastOutputValue = (lastOutputValue * 0.992f) + white * 0.015f
-                        var soundBase = lastOutputValue * 0.2f
+                        var soundBase = lastOutputValue * 0.15f
 
-                        // Trigger a new soft note
+                        // Generative meditation tones
                         pianoTick--
                         if (pianoTick <= 0) {
                             chordDelayTicks--
                             if (chordDelayTicks <= 0) {
-                                // Decide chord scale
                                 val noteCount = random.nextInt(2) + 1
                                 for (n in 0 until noteCount) {
-                                    val randomFreq = scaleFrequencies[random.nextInt(scaleFrequencies.size)]
-                                    // Check if frequency is already active to avoid duplicates
+                                    val randomFreq = medFrequencies[random.nextInt(medFrequencies.size)]
                                     if (activeNotes.none { it.freq == randomFreq }) {
                                         activeNotes.add(
                                             ActiveNote(
                                                 freq = randomFreq,
                                                 time = 0.0,
-                                                maxVolume = random.nextFloat() * 0.18f + 0.08f,
-                                                decay = random.nextFloat() * 0.8f + 0.7f // slower decay
+                                                maxVolume = random.nextFloat() * 0.15f + 0.08f,
+                                                decay = random.nextFloat() * 0.4f + 0.3f
                                             )
                                         )
                                     }
                                 }
                                 chordDelayTicks = random.nextInt(4) + 2
                             }
-                            pianoTick = random.nextInt(sampleRate * 2) + sampleRate * 2 // 2 to 4 seconds interval
+                            pianoTick = random.nextInt(sampleRate * 3) + sampleRate * 2
                         }
 
-                        // Render active notes
                         val iterator = activeNotes.iterator()
                         while (iterator.hasNext()) {
                             val note = iterator.next()
                             note.time += 1.0 / sampleRate
-                            
-                            // Exponential decay
                             val envelope = note.maxVolume * exp(-note.time * note.decay).toFloat()
                             if (envelope < 0.002f) {
                                 iterator.remove()
                                 continue
                             }
-
-                            // Additive synthesis: fundamental + soft 2nd & 3rd harmonics for rich piano warmth
                             val fundamental = sin(2.0 * PI * note.freq * note.time)
-                            val harmonic2 = sin(2.0 * PI * note.freq * 2.0 * note.time) * 0.35
-                            val harmonic3 = sin(2.0 * PI * note.freq * 3.0 * note.time) * 0.15
-                            
-                            soundBase += ((fundamental + harmonic2 + harmonic3) * envelope).toFloat()
+                            val harmonic2 = sin(2.0 * PI * note.freq * 2.0 * note.time) * 0.25
+                            soundBase += ((fundamental + harmonic2) * envelope).toFloat()
                         }
-                        
                         sample = soundBase
                     }
 
-                    AmbientSoundType.LO_FI -> {
-                        // Low crackle floor + slow warm bass synth progress
+                    AmbientSoundType.DEEP_SOUND -> {
+                        // Low-frequency atmospheric drones (55Hz, 110Hz, 165Hz)
+                        val lfo1 = (sin(2.0 * PI * t / 8.0) * 0.2 + 0.8)
+                        val lfo2 = (sin(2.0 * PI * t / 11.0) * 0.2 + 0.8)
+
+                        val subBass = sin(2.0 * PI * 55.0 * t) * 0.4 * lfo1
+                        val bassTone = sin(2.0 * PI * 110.0 * t) * 0.3 * lfo2
+                        val fifthTone = sin(2.0 * PI * 165.0 * t) * 0.15 * lfo1
+                        val octaveTone = sin(2.0 * PI * 220.0 * t) * 0.08 * lfo2
+
                         val white = random.nextFloat() * 2f - 1f
-                        lastOutputValue = (lastOutputValue * 0.96f) + white * 0.05f
-                        var lofiBase = lastOutputValue * 0.3f // background rumble
+                        lastOutputValue = (lastOutputValue * 0.985f) + white * 0.02f
 
-                        // Sudden vinyl pops
-                        if (random.nextFloat() < 0.0015f) {
-                            lofiBase += (if (random.nextBoolean()) 1f else -1f) * (random.nextFloat() * 0.4f + 0.1f)
+                        sample = ((subBass + bassTone + fifthTone + octaveTone) * 0.7f + lastOutputValue * 0.15f).toFloat()
+                    }
+
+                    AmbientSoundType.BELL -> {
+                        // Gentle Tibetan bell ambience
+                        pianoTick--
+                        if (pianoTick <= 0) {
+                            val bellFreq = bellFrequencies[random.nextInt(bellFrequencies.size)]
+                            activeNotes.clear()
+                            activeNotes.add(
+                                ActiveNote(
+                                    freq = bellFreq,
+                                    time = 0.0,
+                                    maxVolume = 0.35f,
+                                    decay = 0.25f
+                                )
+                            )
+                            pianoTick = sampleRate * 6
                         }
 
-                        // Warm slow sub chords (e.g. Eb Major 7 to Ab Major 7 chords)
-                        // Frequencies: Eb3(155.56), G3(196.00), Bb3(233.08), D4(293.66) and Ab2(103.83), C3(130.81), Eb3(155.56), G3(196.00)
-                        val chord1 = floatArrayOf(155.56f, 196.00f, 233.08f, 293.66f)
-                        val chord2 = floatArrayOf(103.83f, 130.81f, 155.56f, 196.00f)
-                        
-                        val cycleDuration = sampleRate * 12 // 12 seconds per chord
-                        val currentCycle = (phase.toLong() % (cycleDuration * 2))
-                        val isFirstChord = currentCycle < cycleDuration
-                        val activeChord = if (isFirstChord) chord1 else chord2
-
-                        // Amplitude envelope for the chord (slow fade in, sustained, slow fade out)
-                        val cyclePosition = currentCycle % cycleDuration
-                        val ratio = cyclePosition.toDouble() / cycleDuration
-                        val volumeEnvelope = when {
-                            ratio < 0.2 -> ratio / 0.2 // Fade in
-                            ratio > 0.8 -> (1.0 - ratio) / 0.2 // Fade out
-                            else -> 1.0 // Sustain
-                        } * 0.15 // volume scale
-
-                        for (freq in activeChord) {
-                            lofiBase += (sin(2.0 * PI * freq * (cyclePosition.toDouble() / sampleRate)) * volumeEnvelope).toFloat()
+                        var bellSample = 0f
+                        val iterator = activeNotes.iterator()
+                        while (iterator.hasNext()) {
+                            val note = iterator.next()
+                            note.time += 1.0 / sampleRate
+                            val envelope = note.maxVolume * exp(-note.time * note.decay).toFloat()
+                            if (envelope < 0.001f) {
+                                iterator.remove()
+                                continue
+                            }
+                            val f = note.freq
+                            val fundamental = sin(2.0 * PI * f * note.time)
+                            val overtone1 = sin(2.0 * PI * f * 2.76 * note.time) * 0.35
+                            val overtone2 = sin(2.0 * PI * f * 5.40 * note.time) * 0.15
+                            bellSample += ((fundamental + overtone1 + overtone2) * envelope).toFloat()
                         }
 
-                        sample = lofiBase
+                        val white = random.nextFloat() * 2f - 1f
+                        lastOutputValue = (lastOutputValue * 0.99f) + white * 0.01f
+
+                        sample = bellSample + lastOutputValue * 0.05f
                     }
 
                     else -> {

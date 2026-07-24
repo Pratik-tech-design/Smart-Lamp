@@ -21,29 +21,36 @@ import java.nio.ByteOrder
 import kotlin.math.sin
 
 class InteractionFeedbackManager(private val context: Context) {
-    private val attributedContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        context.createAttributionContext("default")
-    } else {
-        context
-    }
-
     private var soundPool: SoundPool? = null
     private var tickSoundId: Int = -1
     private var strongTickSoundId: Int = -1
     private var toggleSoundId: Int = -1
     private var brightnessTickSoundId: Int = -1
+    private var glassCrackSoundId: Int = -1
+    private var glassShatterSoundId: Int = -1
+    private var cableRetractSoundId: Int = -1
+    private var lampLowerSoundId: Int = -1
+    private var powerOnSoundId: Int = -1
 
     private var lastTickTime: Long = 0L
     private var lastBrightnessStreamId: Int = -1
+    private var lastGlassCrackStreamId: Int = -1
+    private var lastGlassShatterStreamId: Int = -1
+
+    private val attrContext: Context = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        context.createAttributionContext("default")
+    } else {
+        context
+    }
 
     private val vibrator: Vibrator? by lazy {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vibratorManager = attributedContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                val vibratorManager = attrContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
                 vibratorManager?.defaultVibrator
             } else {
                 @Suppress("DEPRECATION")
-                attributedContext.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                attrContext.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
         } catch (e: Exception) {
             null
@@ -69,24 +76,49 @@ class InteractionFeedbackManager(private val context: Context) {
                 .build()
 
             // Generate and load tick sound
-            val tickFile = File(attributedContext.cacheDir, "tick_crisp.wav")
+            val tickFile = File(context.cacheDir, "tick_crisp.wav")
             writeWavFile(tickFile, generateTickPcm(isStrong = false))
             tickSoundId = soundPool?.load(tickFile.absolutePath, 1) ?: -1
 
             // Generate and load strong tick sound
-            val strongTickFile = File(attributedContext.cacheDir, "tick_strong.wav")
+            val strongTickFile = File(context.cacheDir, "tick_strong.wav")
             writeWavFile(strongTickFile, generateTickPcm(isStrong = true))
             strongTickSoundId = soundPool?.load(strongTickFile.absolutePath, 1) ?: -1
 
             // Generate and load premium lamp toggle sound
-            val toggleFile = File(attributedContext.cacheDir, "lamp_toggle.wav")
+            val toggleFile = File(context.cacheDir, "lamp_toggle.wav")
             writeWavFile(toggleFile, generateTogglePcm())
             toggleSoundId = soundPool?.load(toggleFile.absolutePath, 1) ?: -1
 
             // Generate and load brightness tick sound
-            val brightnessTickFile = File(attributedContext.cacheDir, "brightness_tick.wav")
+            val brightnessTickFile = File(context.cacheDir, "brightness_tick.wav")
             writeWavFile(brightnessTickFile, generateBrightnessTickPcm())
             brightnessTickSoundId = soundPool?.load(brightnessTickFile.absolutePath, 1) ?: -1
+
+            // Generate and load glass crack sound
+            val glassCrackFile = File(context.cacheDir, "glass_crack.wav")
+            writeWavFile(glassCrackFile, generateGlassCrackPcm())
+            glassCrackSoundId = soundPool?.load(glassCrackFile.absolutePath, 1) ?: -1
+
+            // Generate and load glass shatter sound
+            val glassShatterFile = File(context.cacheDir, "glass_shatter.wav")
+            writeWavFile(glassShatterFile, generateGlassShatterPcm())
+            glassShatterSoundId = soundPool?.load(glassShatterFile.absolutePath, 1) ?: -1
+
+            // Generate and load cable retract sound
+            val cableRetractFile = File(context.cacheDir, "cable_retract.wav")
+            writeWavFile(cableRetractFile, generateCableRetractPcm())
+            cableRetractSoundId = soundPool?.load(cableRetractFile.absolutePath, 1) ?: -1
+
+            // Generate and load lamp lower sound
+            val lampLowerFile = File(context.cacheDir, "lamp_lower.wav")
+            writeWavFile(lampLowerFile, generateLampLowerPcm())
+            lampLowerSoundId = soundPool?.load(lampLowerFile.absolutePath, 1) ?: -1
+
+            // Generate and load power-on sound
+            val powerOnFile = File(context.cacheDir, "power_on.wav")
+            writeWavFile(powerOnFile, generatePowerOnPcm())
+            powerOnSoundId = soundPool?.load(powerOnFile.absolutePath, 1) ?: -1
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -95,7 +127,7 @@ class InteractionFeedbackManager(private val context: Context) {
     private fun isSoundEffectsEnabled(): Boolean {
         return try {
             android.provider.Settings.System.getInt(
-                attributedContext.contentResolver,
+                context.contentResolver,
                 android.provider.Settings.System.SOUND_EFFECTS_ENABLED,
                 1
             ) != 0
@@ -107,7 +139,7 @@ class InteractionFeedbackManager(private val context: Context) {
     private fun isHapticFeedbackEnabled(): Boolean {
         return try {
             android.provider.Settings.System.getInt(
-                attributedContext.contentResolver,
+                context.contentResolver,
                 android.provider.Settings.System.HAPTIC_FEEDBACK_ENABLED,
                 1
             ) != 0
@@ -243,6 +275,171 @@ class InteractionFeedbackManager(private val context: Context) {
             soundPool?.stop(streamId)
             lastBrightnessStreamId = -1
         }
+    }
+
+    fun playGlassCrack(view: View, level: Int = 1) {
+        if (isSoundEffectsEnabled()) {
+            if (glassCrackSoundId != -1) {
+                if (lastGlassCrackStreamId != -1) {
+                    soundPool?.stop(lastGlassCrackStreamId)
+                    lastGlassCrackStreamId = -1
+                }
+                val volume = if (level == 1) 0.65f else 0.95f
+                val rate = if (level == 1) 1.15f else 1.0f
+                lastGlassCrackStreamId = soundPool?.play(glassCrackSoundId, volume, volume, 1, 0, rate) ?: -1
+            }
+        }
+        if (level == 1) {
+            triggerHaptic(view, HapticStyle.CLICK)
+        } else {
+            triggerHaptic(view, HapticStyle.HEAVY_CLICK)
+        }
+    }
+
+    fun playGlassShatter(view: View) {
+        if (isSoundEffectsEnabled()) {
+            if (glassShatterSoundId != -1) {
+                if (lastGlassShatterStreamId != -1) {
+                    soundPool?.stop(lastGlassShatterStreamId)
+                    lastGlassShatterStreamId = -1
+                }
+                // Play sound once (loop = 0), rate = 1.0f (no pitch shift / speed change), clear volume
+                lastGlassShatterStreamId = soundPool?.play(glassShatterSoundId, 0.95f, 0.95f, 1, 0, 1.0f) ?: -1
+            }
+        }
+        // Subtle secondary vibration during main shatter for added realism
+        triggerHaptic(view, HapticStyle.TICK)
+    }
+
+    fun playCableRetract(view: View) {
+        if (isSoundEffectsEnabled()) {
+            if (cableRetractSoundId != -1) {
+                soundPool?.play(cableRetractSoundId, 0.70f, 0.70f, 1, 0, 1.0f)
+            }
+        }
+    }
+
+    fun playLampLower(view: View) {
+        if (isSoundEffectsEnabled()) {
+            if (lampLowerSoundId != -1) {
+                soundPool?.play(lampLowerSoundId, 0.75f, 0.75f, 1, 0, 1.0f)
+            }
+        }
+    }
+
+    fun playPowerOn(view: View) {
+        if (isSoundEffectsEnabled()) {
+            if (powerOnSoundId != -1) {
+                soundPool?.play(powerOnSoundId, 0.90f, 0.90f, 1, 0, 1.0f)
+            }
+        }
+        triggerHaptic(view, HapticStyle.HEAVY_CLICK)
+    }
+
+    private fun generateGlassCrackPcm(): ShortArray {
+        val sampleRate = 44100
+        val durationMs = 30
+        val numSamples = (sampleRate * durationMs) / 1000
+        val buffer = ShortArray(numSamples)
+        val random = java.util.Random(12345)
+        for (i in 0 until numSamples) {
+            val t = i.toFloat() / sampleRate
+            val freq1 = 4200f
+            val freq2 = 6800f
+            val noise = (random.nextFloat() * 2f - 1f) * 0.4f
+            val env = Math.exp(-t.toDouble() * 600.0).toFloat()
+            val sampleVal = ((sin(2f * Math.PI.toFloat() * freq1 * t) + sin(2f * Math.PI.toFloat() * freq2 * t) * 0.6f + noise) * env * 30000f).toInt()
+            buffer[i] = sampleVal.coerceIn(-32768, 32767).toShort()
+        }
+        return buffer
+    }
+
+    private fun generateGlassShatterPcm(): ShortArray {
+        val sampleRate = 44100
+        val durationMs = 280
+        val numSamples = (sampleRate * durationMs) / 1000
+        val buffer = ShortArray(numSamples)
+        val random = java.util.Random(8888)
+
+        for (i in 0 until numSamples) {
+            val t = i.toFloat() / sampleRate
+
+            // Sharp glass impact transient
+            val impactEnv = Math.exp(-t.toDouble() * 110.0).toFloat()
+            val impactNoise = (random.nextFloat() * 2f - 1f) * impactEnv * 0.75f
+
+            // Realistic multi-tonal glass ringing harmonics
+            val ringEnv = Math.exp(-t.toDouble() * 22.0).toFloat()
+            val r1 = sin(2f * Math.PI.toFloat() * 2800f * t) * 0.35f
+            val r2 = sin(2f * Math.PI.toFloat() * 4200f * t) * 0.30f
+            val r3 = sin(2f * Math.PI.toFloat() * 6100f * t) * 0.25f
+            val r4 = sin(2f * Math.PI.toFloat() * 7900f * t) * 0.20f
+            val glassRing = (r1 + r2 + r3 + r4) * ringEnv
+
+            // Clattering glass fragment bursts
+            val scatterEnv = Math.exp(-t.toDouble() * 15.0).toFloat()
+            val scatterNoise = (random.nextFloat() * 2f - 1f) * scatterEnv * 0.25f
+
+            // Short smooth fade-out tail at the very end to prevent abrupt clipping
+            val tailFade = if (i > numSamples - 1000) {
+                (numSamples - i).toFloat() / 1000f
+            } else 1.0f
+
+            val mixed = (impactNoise + glassRing + scatterNoise) * tailFade
+            val sampleVal = (mixed * 28000f).toInt()
+            buffer[i] = sampleVal.coerceIn(-32768, 32767).toShort()
+        }
+        return buffer
+    }
+
+    private fun generateCableRetractPcm(): ShortArray {
+        val sampleRate = 44100
+        val durationMs = 250
+        val numSamples = (sampleRate * durationMs) / 1000
+        val buffer = ShortArray(numSamples)
+        val random = java.util.Random(9876)
+        for (i in 0 until numSamples) {
+            val t = i.toFloat() / sampleRate
+            val freq = 800f + (i.toFloat() / numSamples) * 1200f
+            val noise = (random.nextFloat() * 2f - 1f) * 0.25f
+            val env = (sin(Math.PI.toFloat() * (i.toFloat() / numSamples))).toFloat()
+            val sampleVal = ((sin(2f * Math.PI.toFloat() * freq * t) * 0.4f + noise) * env * 24000f).toInt()
+            buffer[i] = sampleVal.coerceIn(-32768, 32767).toShort()
+        }
+        return buffer
+    }
+
+    private fun generateLampLowerPcm(): ShortArray {
+        val sampleRate = 44100
+        val durationMs = 300
+        val numSamples = (sampleRate * durationMs) / 1000
+        val buffer = ShortArray(numSamples)
+        val random = java.util.Random(4321)
+        for (i in 0 until numSamples) {
+            val t = i.toFloat() / sampleRate
+            val freq = 1600f - (i.toFloat() / numSamples) * 1000f
+            val noise = (random.nextFloat() * 2f - 1f) * 0.2f
+            val env = (sin(Math.PI.toFloat() * (i.toFloat() / numSamples))).toFloat()
+            val sampleVal = ((sin(2f * Math.PI.toFloat() * freq * t) * 0.5f + noise) * env * 25000f).toInt()
+            buffer[i] = sampleVal.coerceIn(-32768, 32767).toShort()
+        }
+        return buffer
+    }
+
+    private fun generatePowerOnPcm(): ShortArray {
+        val sampleRate = 44100
+        val durationMs = 150
+        val numSamples = (sampleRate * durationMs) / 1000
+        val buffer = ShortArray(numSamples)
+        for (i in 0 until numSamples) {
+            val t = i.toFloat() / sampleRate
+            val freq1 = 220f + (i.toFloat() / numSamples) * 330f
+            val freq2 = freq1 * 2f
+            val env = Math.exp(-t.toDouble() * 18.0).toFloat() * (if (i < 500) i.toFloat() / 500f else 1f)
+            val sampleVal = ((sin(2f * Math.PI.toFloat() * freq1 * t) * 0.6f + sin(2f * Math.PI.toFloat() * freq2 * t) * 0.3f) * env * 28000f).toInt()
+            buffer[i] = sampleVal.coerceIn(-32768, 32767).toShort()
+        }
+        return buffer
     }
 
     private fun generateBrightnessTickPcm(): ShortArray {

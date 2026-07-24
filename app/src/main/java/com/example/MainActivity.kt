@@ -128,16 +128,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val attributedContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            createAttributionContext("default")
-        } else {
-            this
-        }
-        
         // Save the current hardware screen brightness setting on startup
         try {
             val sysBrightness = android.provider.Settings.System.getInt(
-                attributedContext.contentResolver,
+                contentResolver,
                 android.provider.Settings.System.SCREEN_BRIGHTNESS
             )
             originalBrightness = sysBrightness / 255f
@@ -260,13 +254,8 @@ fun SmartLampAppScreen(
         // 2. If System Brightness Sync is enabled and we have the WRITE_SETTINGS permission, also update system-wide brightness
         if (systemBrightnessSync && hasWriteSettingsPermission) {
             try {
-                val sysAttributedContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    context.createAttributionContext("default")
-                } else {
-                    context
-                }
                 android.provider.Settings.System.putInt(
-                    sysAttributedContext.contentResolver,
+                    context.contentResolver,
                     android.provider.Settings.System.SCREEN_BRIGHTNESS,
                     (targetBrightness * 255).toInt().coerceIn(1, 255)
                 )

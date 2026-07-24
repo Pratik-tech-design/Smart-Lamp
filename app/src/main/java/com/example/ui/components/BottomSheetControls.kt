@@ -605,13 +605,8 @@ fun PowerAndBrightnessSection(
                         onCheckedChange = { isChecked ->
                             feedbackManager.playInteractionClick(view)
                             if (isChecked) {
-                                val checkContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                                    context.createAttributionContext("default")
-                                } else {
-                                    context
-                                }
                                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
-                                    !android.provider.Settings.System.canWrite(checkContext)) {
+                                    !android.provider.Settings.System.canWrite(context)) {
                                     viewModel.setShowPermissionDialog(true)
                                 } else {
                                     viewModel.setSystemBrightnessSync(true)
@@ -1369,38 +1364,36 @@ fun AmbientSoundSection(
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(AmbientSoundType.values()) { sound ->
+                items(AmbientSoundType.values().filter { it != AmbientSoundType.NONE }) { sound ->
                     val isSelected = activeSound == sound
                     val chipBg = if (isSelected) theme.primaryActive.copy(alpha = 0.12f) else theme.sheetBg
                     val borderCol = if (isSelected) theme.primaryActive else theme.border
                     val textCol = if (isSelected) theme.primaryActive else theme.textPrimary
 
-                    if (sound != AmbientSoundType.NONE) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(chipBg)
-                                .border(1.2.dp, borderCol, RoundedCornerShape(12.dp))
-                                .clickableWithFeedback { viewModel.selectAmbientSound(sound) }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isSelected && isPlaying) {
-                                Icon(
-                                    imageVector = Icons.Rounded.GraphicEq,
-                                    contentDescription = "Playing",
-                                    tint = theme.primaryActive,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                            }
-                            Text(
-                                text = sound.displayName,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = textCol
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(chipBg)
+                            .border(1.2.dp, borderCol, RoundedCornerShape(12.dp))
+                            .clickableWithFeedback { viewModel.selectAmbientSound(sound) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isSelected && isPlaying) {
+                            Icon(
+                                imageVector = Icons.Rounded.GraphicEq,
+                                contentDescription = "Playing",
+                                tint = theme.primaryActive,
+                                modifier = Modifier.size(14.dp)
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
                         }
+                        Text(
+                            text = sound.displayName,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = textCol
+                        )
                     }
                 }
             }

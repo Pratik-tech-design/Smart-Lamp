@@ -2,10 +2,18 @@ package com.example.ui.components
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -109,6 +117,187 @@ fun HangingLamp(
     var isDragging by remember { mutableStateOf(false) }
     var targetAngle by remember { mutableStateOf(0f) }
 
+    // Break & Replace Bulb Animation States
+    var isReplacingBulb by remember { mutableStateOf(false) }
+    var breakAnimPhase by remember { mutableStateOf(0) } // 0: Idle, 1: Cracking, 2: Shattered, 3: Retracting, 4: Descending, 5: Illuminating
+    var crackTapCount by remember { mutableStateOf(0) } // 3-Tap progressive breaking counter
+    val lampYOffset = remember { Animatable(0f) }
+    val animGlowFactor = remember { Animatable(1f) }
+    var glassShards by remember { mutableStateOf<List<GlassShard>>(emptyList()) }
+    var crackBranches by remember { mutableStateOf<List<CrackBranch>>(emptyList()) }
+    var crackAlpha by remember { mutableStateOf(1f) }
+    var shardsAlpha by remember { mutableStateOf(1f) }
+
+    val length = nominalCableLength
+
+    fun triggerFullShatterSequence(sphereCenter: Offset, bRadius: Float, d: Float) {
+        coroutineScope.launch {
+            if (isReplacingBulb) return@launch
+            isReplacingBulb = true
+
+            // STEP 1: SHATTERING & AUDIO SYNCHRONIZATION
+            breakAnimPhase = 2
+            feedbackManager.playGlassShatter(view)
+
+            // Extinguish light bloom instantly
+            launch { animGlowFactor.animateTo(0f, tween(80)) }
+
+            // Spawn physics glass shards around sphereCenter synchronized with audio
+            glassShards = generateGlassShards(sphereCenter, bRadius, containerWidth, containerHeight, d)
+            shardsAlpha = 1f
+
+            // Physics animation loop for glass shards falling
+            val physicsJob = launch {
+                val floorY = if (containerHeight > 0f) containerHeight * 0.95f else 800f
+                val gravity = 2200f * d
+                val dt = 0.016f
+                val totalTicks = 38 // ~600ms
+                for (tick in 0..totalTicks) {
+                    val updated = glassShards.map { shard ->
+                        shard.vy += gravity * dt
+                        shard.x += shard.vx * dt
+                        shard.y += shard.vy * dt
+                        shard.rotation += shard.vRot * dt
+
+                        if (shard.y >= floorY && shard.bounceCount < 2) {
+                            shard.y = floorY
+                            shard.vy = -shard.vy * 0.28f
+                            shard.vx *= 0.55f
+                            shard.bounceCount++
+                        }
+                        shard
+                    }
+                    glassShards = updated
+                    if (tick > 22) {
+                        shardsAlpha = (totalTicks - tick) / 16f
+                    }
+                    delay(16)
+                }
+                glassShards = emptyList()
+            }
+
+            // Wait for shattered glass fragments to fall and clear
+            physicsJob.join()
+
+            // STEP 2: CINEMATIC PAUSE (350ms hold of broken hanging socket before retracting)
+            delay(350)
+
+            // STEP 3: BROKEN BULB REMOVAL (RETRACT CABLE) (~380ms)
+            breakAnimPhase = 3
+            feedbackManager.playCableRetract(view)
+
+            val offscreenY = -length - 200f * d
+            lampYOffset.animateTo(
+                targetValue = offscreenY,
+                animationSpec = tween(380, easing = FastOutLinearInEasing)
+            )
+
+            delay(30)
+
+            // Clear crack branches so new bulb is completely undamaged
+            crackBranches = emptyList()
+
+            // STEP 4: NEW BULB ARRIVAL (DESCEND) (~550ms)
+            breakAnimPhase = 4
+            feedbackManager.playLampLower(view)
+
+            launch {
+                lampYOffset.animateTo(
+                    targetValue = 0f,
+                    animationSpec = spring(
+                        dampingRatio = 0.65f,
+                        stiffness = Spring.StiffnessLow
+                    )
+                )
+            }
+
+            launch {
+                angle.snapTo(0.25f)
+                angle.animateTo(
+                    targetValue = 0f,
+                    animationSpec = spring(
+                        dampingRatio = 0.40f,
+                        stiffness = Spring.StiffnessVeryLow
+                    )
+                )
+            }
+
+            delay(550)
+
+            // STEP 5: LIGHT TURNS BACK ON (~350ms)
+            breakAnimPhase = 5
+            feedbackManager.playPowerOn(view)
+
+            animGlowFactor.animateTo(1f, tween(350))
+
+            // Reset counter & states
+            breakAnimPhase = 0
+            crackTapCount = 0
+            isReplacingBulb = false
+        }
+    }
+
+    fun handleBulbTap(tapPos: Offset) {
+        if (isReplacingBulb) return // Timing Protection: ignore all taps during bulb replacement
+
+        val currentScale = lampScale * focusScaleFactor
+        val d = density.density
+        val bRadius = 32f * d * currentScale
+        val centerX = containerWidth / 2f
+        val holderH = 44f * d * currentScale
+        val spacerH = 4f * d * currentScale
+        val sphereCenter = Offset(centerX, length + pullOffset.value + lampYOffset.value + holderH + spacerH + bRadius * 0.8f)
+
+        when (crackTapCount) {
+            0 -> {
+                // FIRST TAP: Localized small crack (10-20% glass damaged). Light remains ON.
+                crackTapCount = 1
+                crackBranches = generateLevel1Cracks(sphereCenter, tapPos, bRadius, d)
+                crackAlpha = 1f
+                feedbackManager.playGlassCrack(view, level = 1)
+            }
+            1 -> {
+                // SECOND TAP: Expand existing cracks (50-70% damaged). Micro particles fall naturally.
+                crackTapCount = 2
+                crackBranches = generateLevel2Cracks(crackBranches, sphereCenter, tapPos, bRadius, d)
+                crackAlpha = 1f
+                feedbackManager.playGlassCrack(view, level = 2)
+
+                // Spawn micro glass particles falling naturally
+                coroutineScope.launch {
+                    val microList = generateMicroShards(sphereCenter, bRadius, d)
+                    val floorY = if (containerHeight > 0f) containerHeight * 0.95f else 800f
+                    val gravity = 1800f * d
+                    val dt = 0.016f
+                    glassShards = microList
+                    shardsAlpha = 1f
+                    for (tick in 0..25) {
+                        val updated = glassShards.map { shard ->
+                            shard.vy += gravity * dt
+                            shard.x += shard.vx * dt
+                            shard.y += shard.vy * dt
+                            shard.rotation += shard.vRot * dt
+                            if (shard.y >= floorY && shard.bounceCount < 1) {
+                                shard.y = floorY
+                                shard.vy = -shard.vy * 0.3f
+                                shard.bounceCount++
+                            }
+                            shard
+                        }
+                        glassShards = updated
+                        shardsAlpha = (25 - tick) / 25f
+                        delay(16)
+                    }
+                    glassShards = emptyList()
+                }
+            }
+            else -> {
+                // THIRD TAP: Full shatter & automatic bulb replacement
+                triggerFullShatterSequence(sphereCenter, bRadius, d)
+            }
+        }
+    }
+
     // Tap scale bump microinteraction
     var tapScaleBump by remember { mutableStateOf(1f) }
     val animatedTapScale by animateFloatAsState(
@@ -121,7 +310,6 @@ fun HangingLamp(
         }
     )
 
-    val length = nominalCableLength
     var lastTapTime by remember { mutableStateOf(0L) }
 
     // Sync bulb position with ViewModel whenever the interactive angle or length changes
@@ -267,18 +455,22 @@ fun HangingLamp(
 
                             if (elapsed < 300L && finalDist < 12.dp.toPx()) {
                                 // TAP DETECTED!
-                                val now = System.currentTimeMillis()
-                                if (now - lastTapTime < 300L) {
-                                    // DOUBLE TAP: Toggle Focus Mode
-                                    feedbackManager.playInteractionClick(view)
-                                    viewModel.toggleFocusMode()
-                                    lastTapTime = 0L
+                                if (distToBulb <= bulbRadiusPx * 1.35f && !isReplacingBulb) {
+                                    // Tapped directly on the glass bulb -> trigger 3-tap progressive breaking animation
+                                    handleBulbTap(down.position)
                                 } else {
-                                    // SINGLE TAP: Toggle bottom sheet controls
-                                    lastTapTime = now
-                                    feedbackManager.playInteractionClick(view)
-                                    tapScaleBump = 1.15f
-                                    onTap()
+                                    // Tapped upper holder/cable -> handle double tap focus mode or single tap bottom sheet toggle
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastTapTime < 300L) {
+                                        feedbackManager.playInteractionClick(view)
+                                        viewModel.toggleFocusMode()
+                                        lastTapTime = 0L
+                                    } else {
+                                        lastTapTime = now
+                                        feedbackManager.playInteractionClick(view)
+                                        tapScaleBump = 1.15f
+                                        onTap()
+                                    }
                                 }
                             } else {
                                 // DRAGGING / SWIPING: Adjust swing angle or brightness
@@ -369,11 +561,12 @@ fun HangingLamp(
             val holderWidth = 36.dp.toPx() * currentScale
             val holderHeight = 44.dp.toPx() * currentScale
             val holderLeft = startPoint.x - holderWidth / 2f
-            val holderTop = length + pullOffset.value
+            val holderTop = length + pullOffset.value + lampYOffset.value
             val spacerHeight = 4.dp.toPx() * currentScale
             val sphereCenter = Offset(startPoint.x, holderTop + holderHeight + spacerHeight + bulbRadius * 0.8f)
 
-            val currentGlow = glowFactor
+            val currentGlow = glowFactor * animGlowFactor.value
+            val drawGlassBulb = (breakAnimPhase < 2 || breakAnimPhase >= 4)
 
             // Dynamic 3D Wall Shadow perspective shift lagging behind the lamp
             val shadowOffset = Offset(
@@ -394,7 +587,7 @@ fun HangingLamp(
             // Cable Shadow (drawn statically)
             val shadowPath = Path().apply {
                 moveTo(startPoint.x, startPoint.y)
-                lineTo(startPoint.x, length)
+                lineTo(startPoint.x, holderTop)
             }
             drawPath(
                 path = shadowPath,
@@ -405,12 +598,12 @@ fun HangingLamp(
                 )
             )
 
-            // Holder, Spacer, Bulb Shadow (rotated around Offset(startPoint.x, length + pullOffset.value))
+            // Holder, Spacer, Bulb Shadow (rotated around Offset(startPoint.x, holderTop))
             withTransform({
                 translate(left = shadowOffset.x, top = shadowOffset.y)
-                rotate(degrees = Math.toDegrees(angle.value.toDouble()).toFloat(), pivot = Offset(startPoint.x, length + pullOffset.value))
+                rotate(degrees = Math.toDegrees(angle.value.toDouble()).toFloat(), pivot = Offset(startPoint.x, holderTop))
                 val stretchY = 1.0f + kotlin.math.abs(sin(angle.value)) * 0.12f
-                scale(scaleX = 1.0f, scaleY = stretchY, pivot = Offset(startPoint.x, length + pullOffset.value))
+                scale(scaleX = 1.0f, scaleY = stretchY, pivot = Offset(startPoint.x, holderTop))
             }) {
                 // Holder and Spacer Shadow
                 drawRoundRect(
@@ -426,18 +619,20 @@ fun HangingLamp(
                     cornerRadius = CornerRadius(8.dp.toPx() * currentScale * shadowBlurScale, 8.dp.toPx() * currentScale * shadowBlurScale)
                 )
 
-                // Bulb Shadow
-                drawCircle(
-                    color = shadowColor,
-                    center = sphereCenter,
-                    radius = bulbRadius * shadowBlurScale
-                )
+                // Bulb Shadow (drawn only if bulb exists)
+                if (drawGlassBulb) {
+                    drawCircle(
+                        color = shadowColor,
+                        center = sphereCenter,
+                        radius = bulbRadius * shadowBlurScale
+                    )
+                }
             }
 
-            // ================= 2. THE PHYSICAL HANGING CABLE (Perfecty straight, completely motionless) =================
+            // ================= 2. THE PHYSICAL HANGING CABLE =================
             val cablePath = Path().apply {
                 moveTo(startPoint.x, startPoint.y)
-                lineTo(startPoint.x, length)
+                lineTo(startPoint.x, holderTop)
             }
 
             val cableBrush = if (currentGlow > 0.01f) {
@@ -459,13 +654,13 @@ fun HangingLamp(
                         )
                     ),
                     startY = startPoint.y,
-                    endY = length
+                    endY = holderTop.coerceAtLeast(1f)
                 )
             } else {
                 Brush.verticalGradient(
                     colors = listOf(Color(0xFF111218), Color(0xFF161820)),
                     startY = startPoint.y,
-                    endY = length
+                    endY = holderTop.coerceAtLeast(1f)
                 )
             }
 
@@ -478,13 +673,13 @@ fun HangingLamp(
                 )
             )
 
-            // ================= 2B. BEADED METALLIC PULL CHAIN (Becomes visible when user pulls the lamp) =================
+            // ================= 2B. BEADED METALLIC PULL CHAIN =================
             if (pullOffset.value > 0.5f) {
                 val beadRadius = 2.dp.toPx() * currentScale
                 val beadSpacing = 5.dp.toPx() * currentScale
                 val numBeads = (pullOffset.value / beadSpacing).toInt().coerceAtLeast(1)
                 for (i in 0 until numBeads) {
-                    val y = length + (i + 0.5f) * (pullOffset.value / numBeads)
+                    val y = holderTop + (i + 0.5f) * (pullOffset.value / numBeads)
                     drawCircle(
                         color = if (currentGlow > 0.5f) selectedColor.copy(alpha = 0.8f) else Color(0xFF8E9297),
                         center = Offset(startPoint.x, y),
@@ -493,12 +688,12 @@ fun HangingLamp(
                 }
             }
 
-            // ================= 3. DRAW MAIN RIGID BODY ASSEMBLY (Rotates around the bottom end of the cable) =================
+            // ================= 3. DRAW MAIN RIGID BODY ASSEMBLY =================
             withTransform({
-                rotate(degrees = Math.toDegrees(angle.value.toDouble()).toFloat(), pivot = Offset(startPoint.x, length + pullOffset.value))
+                rotate(degrees = Math.toDegrees(angle.value.toDouble()).toFloat(), pivot = Offset(startPoint.x, holderTop))
             }) {
                 // ================= 3A. THE PHYSICAL LIGHTING BLOOM LAYERS =================
-                if (currentGlow > 0.01f) {
+                if (currentGlow > 0.01f && drawGlassBulb) {
                     // Layer A: Very Large Screen-Wide Ambient Halo
                     val haloRadius = 320.dp.toPx() * currentScale * (0.4f + 0.6f * brightness)
                     drawCircle(
@@ -640,96 +835,442 @@ fun HangingLamp(
                 )
 
                 // ================= 3C. THE FROSTED GLASS GLOBE BULB =================
-                val glassBrush = if (currentGlow > 0.01f) {
-                    val r1 = 1.0f * currentGlow + 0.83f * (1f - currentGlow)
-                    val g1 = 1.0f * currentGlow + 0.85f * (1f - currentGlow)
-                    val b1 = 1.0f * currentGlow + 0.90f * (1f - currentGlow)
+                if (drawGlassBulb) {
+                    val glassBrush = if (currentGlow > 0.01f) {
+                        val r1 = 1.0f * currentGlow + 0.83f * (1f - currentGlow)
+                        val g1 = 1.0f * currentGlow + 0.85f * (1f - currentGlow)
+                        val b1 = 1.0f * currentGlow + 0.90f * (1f - currentGlow)
 
-                    val r2 = selectedColor.red * currentGlow + 0.62f * (1f - currentGlow)
-                    val g2 = selectedColor.green * currentGlow + 0.69f * (1f - currentGlow)
-                    val b2 = selectedColor.blue * currentGlow + 0.75f * (1f - currentGlow)
+                        val r2 = selectedColor.red * currentGlow + 0.62f * (1f - currentGlow)
+                        val g2 = selectedColor.green * currentGlow + 0.69f * (1f - currentGlow)
+                        val b2 = selectedColor.blue * currentGlow + 0.75f * (1f - currentGlow)
 
-                    val r3 = selectedColor.red * currentGlow + 0.39f * (1f - currentGlow)
-                    val g3 = selectedColor.green * currentGlow + 0.45f * (1f - currentGlow)
-                    val b3 = selectedColor.blue * currentGlow + 0.52f * (1f - currentGlow)
+                        val r3 = selectedColor.red * currentGlow + 0.39f * (1f - currentGlow)
+                        val g3 = selectedColor.green * currentGlow + 0.45f * (1f - currentGlow)
+                        val b3 = selectedColor.blue * currentGlow + 0.52f * (1f - currentGlow)
 
-                    Brush.radialGradient(
-                        colors = listOf(
-                            Color(red = r1, green = g1, blue = b1).copy(alpha = 1f),
-                            Color(red = r2, green = g2, blue = b2).copy(alpha = 0.92f * currentGlow + 1.0f * (1f - currentGlow)),
-                            Color(red = r3, green = g3, blue = b3).copy(alpha = 0.72f * currentGlow + 1.0f * (1f - currentGlow))
-                        ),
-                        center = sphereCenter - Offset(bulbRadius * 0.15f, bulbRadius * 0.15f),
-                        radius = bulbRadius
-                    )
-                } else {
-                    Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFFD4D8E6),
-                            Color(0xFF9EAFBF),
-                            Color(0xFF637385)
-                        ),
-                        center = sphereCenter - Offset(bulbRadius * 0.15f, bulbRadius * 0.15f),
-                        radius = bulbRadius
-                    )
-                }
-
-                drawCircle(
-                    brush = glassBrush,
-                    center = sphereCenter,
-                    radius = bulbRadius
-                )
-
-                // Inner bright LED core filament bloom
-                if (currentGlow > 0.01f) {
-                    val coreRadius = 14.dp.toPx() * currentScale
-                    drawCircle(
-                        brush = Brush.radialGradient(
+                        Brush.radialGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = currentGlow),
-                                Color.White.copy(alpha = 0.90f * currentGlow),
-                                selectedColor.copy(alpha = 0.40f * currentGlow),
-                                Color.Transparent
+                                Color(red = r1, green = g1, blue = b1).copy(alpha = 1f),
+                                Color(red = r2, green = g2, blue = b2).copy(alpha = 0.92f * currentGlow + 1.0f * (1f - currentGlow)),
+                                Color(red = r3, green = g3, blue = b3).copy(alpha = 0.72f * currentGlow + 1.0f * (1f - currentGlow))
+                            ),
+                            center = sphereCenter - Offset(bulbRadius * 0.15f, bulbRadius * 0.15f),
+                            radius = bulbRadius
+                        )
+                    } else {
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFFD4D8E6),
+                                Color(0xFF9EAFBF),
+                                Color(0xFF637385)
+                            ),
+                            center = sphereCenter - Offset(bulbRadius * 0.15f, bulbRadius * 0.15f),
+                            radius = bulbRadius
+                        )
+                    }
+
+                    drawCircle(
+                        brush = glassBrush,
+                        center = sphereCenter,
+                        radius = bulbRadius
+                    )
+
+                    // Inner bright LED core filament bloom
+                    if (currentGlow > 0.01f) {
+                        val coreRadius = 14.dp.toPx() * currentScale
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = currentGlow),
+                                    Color.White.copy(alpha = 0.90f * currentGlow),
+                                    selectedColor.copy(alpha = 0.40f * currentGlow),
+                                    Color.Transparent
+                                ),
+                                center = sphereCenter,
+                                radius = coreRadius
                             ),
                             center = sphereCenter,
                             radius = coreRadius
+                        )
+                    }
+
+                    // Elegant outer glass envelope line
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.25f).copy(
+                            red = selectedColor.red * currentGlow + 1.0f * (1f - currentGlow),
+                            green = selectedColor.green * currentGlow + 1.0f * (1f - currentGlow),
+                            blue = selectedColor.blue * currentGlow + 1.0f * (1f - currentGlow),
+                            alpha = 0.35f * currentGlow + 0.25f * (1f - currentGlow)
                         ),
                         center = sphereCenter,
-                        radius = coreRadius
+                        radius = bulbRadius,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.2.dp.toPx())
                     )
-                }
 
-                // Elegant outer glass envelope line
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.25f).copy(
-                        red = selectedColor.red * currentGlow + 1.0f * (1f - currentGlow),
-                        green = selectedColor.green * currentGlow + 1.0f * (1f - currentGlow),
-                        blue = selectedColor.blue * currentGlow + 1.0f * (1f - currentGlow),
-                        alpha = 0.35f * currentGlow + 0.25f * (1f - currentGlow)
-                    ),
-                    center = sphereCenter,
-                    radius = bulbRadius,
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.2.dp.toPx())
-                )
-
-                // Glossy surface highlight
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = if (isOn) 0.65f else 0.45f),
-                            Color.Transparent
+                    // Glossy surface highlight
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = if (isOn) 0.65f else 0.45f),
+                                Color.Transparent
+                            ),
+                            center = sphereCenter - Offset(bulbRadius * 0.35f, bulbRadius * 0.35f),
+                            radius = bulbRadius * 0.38f
                         ),
                         center = sphereCenter - Offset(bulbRadius * 0.35f, bulbRadius * 0.35f),
                         radius = bulbRadius * 0.38f
-                    ),
-                    center = sphereCenter - Offset(bulbRadius * 0.35f, bulbRadius * 0.35f),
-                    radius = bulbRadius * 0.38f
-                )
+                    )
+
+                    // Overlaid Crack branches (persists across taps while bulb is present)
+                    if (crackBranches.isNotEmpty()) {
+                        val crackStroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = 1.8.dp.toPx(),
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                        val shadowStroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = 0.8.dp.toPx(),
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                        for (branch in crackBranches) {
+                            val cPath = Path()
+                            if (branch.points.isNotEmpty()) {
+                                cPath.moveTo(branch.points[0].x, branch.points[0].y)
+                                for (k in 1 until branch.points.size) {
+                                    cPath.lineTo(branch.points[k].x, branch.points[k].y)
+                                }
+                                drawPath(path = cPath, color = Color(0xFF1E293B).copy(alpha = 0.5f * crackAlpha), style = shadowStroke)
+                                drawPath(path = cPath, color = Color.White.copy(alpha = 0.95f * crackAlpha), style = crackStroke)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ================= 4. DRAW SHATTERED GLASS SHARDS =================
+            if (glassShards.isNotEmpty() && shardsAlpha > 0.01f) {
+                for (shard in glassShards) {
+                    withTransform({
+                        translate(shard.x, shard.y)
+                        rotate(shard.rotation)
+                    }) {
+                        val shardPath = Path()
+                        if (shard.polygonPoints.isNotEmpty()) {
+                            shardPath.moveTo(shard.polygonPoints[0].x, shard.polygonPoints[0].y)
+                            for (ptIdx in 1 until shard.polygonPoints.size) {
+                                shardPath.lineTo(shard.polygonPoints[ptIdx].x, shard.polygonPoints[ptIdx].y)
+                            }
+                            shardPath.close()
+
+                            val shardBrush = Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.90f * shardsAlpha),
+                                    Color(0xFFE2E8F0).copy(alpha = 0.75f * shardsAlpha),
+                                    Color(0xFF94A3B8).copy(alpha = 0.50f * shardsAlpha)
+                                ),
+                                center = Offset.Zero,
+                                radius = shard.size * 1.2f
+                            )
+                            drawPath(path = shardPath, brush = shardBrush)
+                            drawPath(
+                                path = shardPath,
+                                color = Color.White.copy(alpha = 0.8f * shardsAlpha),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx())
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+private data class GlassShard(
+    val polygonPoints: List<Offset>,
+    var x: Float,
+    var y: Float,
+    var vx: Float,
+    var vy: Float,
+    var rotation: Float,
+    var vRot: Float,
+    var size: Float,
+    var bounceCount: Int = 0
+)
+
+private data class CrackBranch(
+    val points: List<Offset>
+)
+
+private fun generateCrackBranches(center: Offset, radius: Float, density: Float): List<CrackBranch> {
+    val branches = mutableListOf<CrackBranch>()
+    val random = java.util.Random()
+    val numMainBranches = 6
+    for (i in 0 until numMainBranches) {
+        val baseAngle = (i.toFloat() / numMainBranches) * 2f * PI.toFloat() + (random.nextFloat() - 0.5f) * 0.4f
+        val points = mutableListOf<Offset>()
+        points.add(center)
+        var currentRadius = 0f
+        var currentAngle = baseAngle
+        var currentPt = center
+        while (currentRadius < radius) {
+            val step = (4f + random.nextFloat() * 6f) * density
+            currentRadius += step
+            currentAngle += (random.nextFloat() - 0.5f) * 0.5f
+            currentPt = Offset(
+                center.x + currentRadius * cos(currentAngle),
+                center.y + currentRadius * sin(currentAngle)
+            )
+            points.add(currentPt)
+        }
+        branches.add(CrackBranch(points))
+    }
+    return branches
+}
+
+private fun generateGlassShards(
+    center: Offset,
+    radius: Float,
+    containerWidth: Float,
+    containerHeight: Float,
+    density: Float
+): List<GlassShard> {
+    val shards = mutableListOf<GlassShard>()
+    val random = java.util.Random()
+    val totalShards = 38
+
+    for (i in 0 until totalShards) {
+        val shardType = when {
+            i < 7 -> 0 // Large frosted glass chunks
+            i < 20 -> 1 // Medium irregular glass pieces
+            i < 29 -> 2 // Sharp, narrow elongated glass slivers
+            else -> 3   // Micro glass dust particles
+        }
+
+        val size = when (shardType) {
+            0 -> (12f + random.nextFloat() * 6f) * density
+            1 -> (7f + random.nextFloat() * 4f) * density
+            2 -> (8f + random.nextFloat() * 6f) * density
+            else -> (2f + random.nextFloat() * 2.5f) * density
+        }
+
+        val polyPoints = mutableListOf<Offset>()
+        when (shardType) {
+            2 -> { // Elongated glass sliver/needle geometry
+                val width = size * (0.25f + random.nextFloat() * 0.2f)
+                val length = size * (1.2f + random.nextFloat() * 0.8f)
+                polyPoints.add(Offset(-width, -length * 0.5f))
+                polyPoints.add(Offset(width, -length * 0.3f))
+                polyPoints.add(Offset(width * 0.5f, length * 0.5f))
+            }
+            3 -> { // Micro particle (tiny triangle)
+                polyPoints.add(Offset(-size, -size * 0.5f))
+                polyPoints.add(Offset(size * 0.8f, -size * 0.4f))
+                polyPoints.add(Offset(size * 0.3f, size))
+            }
+            else -> { // Irregular polygon for chunks & medium shards (4-5 vertices)
+                val numVerts = if (shardType == 0) (4 + random.nextInt(2)) else 3
+                for (v in 0 until numVerts) {
+                    val a = (v.toFloat() / numVerts) * 2f * PI.toFloat() + (random.nextFloat() - 0.5f) * 0.6f
+                    val r = size * (0.5f + random.nextFloat() * 0.7f)
+                    polyPoints.add(Offset(cos(a) * r, sin(a) * r))
+                }
+            }
+        }
+
+        val spawnAngle = random.nextFloat() * 2f * PI.toFloat()
+        val spawnRadius = random.nextFloat() * radius * 0.85f
+        val spawnX = center.x + cos(spawnAngle) * spawnRadius
+        val spawnY = center.y + sin(spawnAngle) * spawnRadius
+
+        val expSpeed = when (shardType) {
+            3 -> (350f + random.nextFloat() * 350f) * density // Micro particles shoot far
+            2 -> (220f + random.nextFloat() * 280f) * density // Slivers
+            1 -> (180f + random.nextFloat() * 220f) * density // Medium
+            else -> (110f + random.nextFloat() * 160f) * density // Large heavy chunks
+        }
+
+        val vx = cos(spawnAngle) * expSpeed + (random.nextFloat() - 0.5f) * 140f * density
+        val vy = sin(spawnAngle) * expSpeed - (60f + random.nextFloat() * 160f) * density
+        val rotation = random.nextFloat() * 360f
+
+        // Smaller & thin shards tumble/rotate faster
+        val vRot = when (shardType) {
+            3 -> (if (random.nextBoolean()) 1f else -1f) * (1800f + random.nextFloat() * 1200f)
+            2 -> (if (random.nextBoolean()) 1f else -1f) * (1200f + random.nextFloat() * 800f)
+            1 -> (if (random.nextBoolean()) 1f else -1f) * (600f + random.nextFloat() * 600f)
+            else -> (if (random.nextBoolean()) 1f else -1f) * (300f + random.nextFloat() * 300f)
+        }
+
+        shards.add(
+            GlassShard(
+                polygonPoints = polyPoints,
+                x = spawnX,
+                y = spawnY,
+                vx = vx,
+                vy = vy,
+                rotation = rotation,
+                vRot = vRot,
+                size = size
+            )
+        )
+    }
+    return shards
+}
+
+private fun generateLevel1Cracks(
+    center: Offset,
+    tapPos: Offset,
+    radius: Float,
+    density: Float
+): List<CrackBranch> {
+    val branches = mutableListOf<CrackBranch>()
+    val random = java.util.Random()
+
+    val dirX = tapPos.x - center.x
+    val dirY = tapPos.y - center.y
+    val dist = sqrt(dirX * dirX + dirY * dirY)
+    val impactCenter = if (dist > 0.1f) {
+        val clampedR = dist.coerceAtMost(radius * 0.6f)
+        Offset(center.x + (dirX / dist) * clampedR, center.y + (dirY / dist) * clampedR)
+    } else {
+        center
+    }
+
+    // 3 small localized fracture branches (~15% coverage)
+    val numBranches = 3
+    for (i in 0 until numBranches) {
+        val baseAngle = (i.toFloat() / numBranches) * 2f * PI.toFloat() + (random.nextFloat() - 0.5f) * 0.5f
+        val points = mutableListOf<Offset>()
+        points.add(impactCenter)
+        var currR = 0f
+        var currA = baseAngle
+        var currPt = impactCenter
+        val maxLen = radius * (0.22f + random.nextFloat() * 0.12f)
+        while (currR < maxLen) {
+            val step = (3f + random.nextFloat() * 4f) * density
+            currR += step
+            currA += (random.nextFloat() - 0.5f) * 0.6f
+            currPt = Offset(impactCenter.x + currR * cos(currA), impactCenter.y + currR * sin(currA))
+            points.add(currPt)
+        }
+        branches.add(CrackBranch(points))
+    }
+    return branches
+}
+
+private fun generateLevel2Cracks(
+    existingBranches: List<CrackBranch>,
+    center: Offset,
+    tapPos: Offset,
+    radius: Float,
+    density: Float
+): List<CrackBranch> {
+    val branches = mutableListOf<CrackBranch>()
+    val random = java.util.Random()
+
+    // 1. Expand existing Level 1 cracks outwards (~60% coverage)
+    for (oldBranch in existingBranches) {
+        if (oldBranch.points.isEmpty()) continue
+        val pts = oldBranch.points.toMutableList()
+        val lastPt = pts.last()
+        val firstPt = pts.first()
+
+        var dx = lastPt.x - firstPt.x
+        var dy = lastPt.y - firstPt.y
+        var angle = atan2(dy, dx)
+        if (dx == 0f && dy == 0f) angle = random.nextFloat() * 2f * PI.toFloat()
+
+        var currPt = lastPt
+        var currentRadiusFromCenter = sqrt((lastPt.x - center.x).pow(2) + (lastPt.y - center.y).pow(2))
+        val targetRadius = radius * (0.65f + random.nextFloat() * 0.18f)
+
+        while (currentRadiusFromCenter < targetRadius) {
+            val step = (4f + random.nextFloat() * 5f) * density
+            angle += (random.nextFloat() - 0.5f) * 0.5f
+            currPt = Offset(currPt.x + cos(angle) * step, currPt.y + sin(angle) * step)
+            pts.add(currPt)
+            currentRadiusFromCenter = sqrt((currPt.x - center.x).pow(2) + (currPt.y - center.y).pow(2))
+        }
+        branches.add(CrackBranch(pts))
+
+        // Side branch fork from mid point
+        if (pts.size >= 3) {
+            val midPt = pts[pts.size / 2]
+            val forkPoints = mutableListOf<Offset>()
+            forkPoints.add(midPt)
+            var forkAngle = angle + (if (random.nextBoolean()) 1f else -1f) * (0.7f + random.nextFloat() * 0.4f)
+            var forkPt = midPt
+            var forkLen = 0f
+            val maxFork = radius * (0.3f + random.nextFloat() * 0.15f)
+            while (forkLen < maxFork) {
+                val step = (3f + random.nextFloat() * 4f) * density
+                forkLen += step
+                forkAngle += (random.nextFloat() - 0.5f) * 0.5f
+                forkPt = Offset(forkPt.x + cos(forkAngle) * step, forkPt.y + sin(forkAngle) * step)
+                forkPoints.add(forkPt)
+            }
+            branches.add(CrackBranch(forkPoints))
+        }
+    }
+
+    // 2. Add 2 additional new main fracture branches
+    for (i in 0 until 2) {
+        val baseAngle = random.nextFloat() * 2f * PI.toFloat()
+        val points = mutableListOf<Offset>()
+        points.add(center)
+        var currR = 0f
+        var currA = baseAngle
+        var currPt = center
+        val maxLen = radius * (0.55f + random.nextFloat() * 0.2f)
+        while (currR < maxLen) {
+            val step = (4f + random.nextFloat() * 5f) * density
+            currR += step
+            currA += (random.nextFloat() - 0.5f) * 0.5f
+            currPt = Offset(center.x + currR * cos(currA), center.y + currR * sin(currA))
+            points.add(currPt)
+        }
+        branches.add(CrackBranch(points))
+    }
+
+    return branches
+}
+
+private fun generateMicroShards(
+    center: Offset,
+    radius: Float,
+    density: Float
+): List<GlassShard> {
+    val shards = mutableListOf<GlassShard>()
+    val random = java.util.Random()
+    val numShards = 5
+    for (i in 0 until numShards) {
+        val size = (2f + random.nextFloat() * 3f) * density
+        val polyPoints = listOf(
+            Offset(-size, -size * 0.5f),
+            Offset(size * 0.8f, -size),
+            Offset(size * 0.5f, size)
+        )
+        val spawnAngle = random.nextFloat() * 2f * PI.toFloat()
+        val spawnRadius = random.nextFloat() * radius * 0.6f
+        val spawnX = center.x + cos(spawnAngle) * spawnRadius
+        val spawnY = center.y + sin(spawnAngle) * spawnRadius
+
+        shards.add(
+            GlassShard(
+                polygonPoints = polyPoints,
+                x = spawnX,
+                y = spawnY,
+                vx = (random.nextFloat() - 0.5f) * 60f * density,
+                vy = (20f + random.nextFloat() * 40f) * density,
+                rotation = random.nextFloat() * 360f,
+                vRot = (random.nextFloat() - 0.5f) * 600f,
+                size = size
+            )
+        )
+    }
+    return shards
+}
+
 private fun computedAngle(dx: Float, dy: Float): Float {
-    return atan2(dx, dy)
+    return kotlin.math.atan2(dx, dy)
 }
